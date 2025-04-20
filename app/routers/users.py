@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, status, HTTPException
 from fastapi.security import HTTPBearer
 from app.schemas.users import UpdateUser, Users, UserBase
+# from app.db.users import db
 import boto3
 from app.responses.users import SuccessResponse, ErrorResponse
+import logging
+
 #from pyjwt import pyjwt
 
 
@@ -12,9 +15,11 @@ oauth2_scheme = HTTPBearer()
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table('users')
 
+
 @router.post("/create", response_model=SuccessResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
-    user: Users
+    user: Users,
+    token: HTTPBearer = Depends(oauth2_scheme)
 ):
     try:
         info = table.get_item(Key={'username': user.username, 'last_name':user.last_name})
@@ -29,10 +34,28 @@ async def create_user(
         })
     
     table.put_item(
-        Item= user.dict()
+        Item= user.dict(),
+        ConditionExpression='attribute_not_exists(username)'
         )    
 
     return SuccessResponse(status_code=201, detail=f"The user {user.username} has been created", data=user.model_dump())
+
+@router.post("/users/bulk")
+async def upload_users(users: list[Users]):
+    try:
+        with table.batch_writer() as batch:
+            for user in users:
+                batch.put_item(Item=user.dict())
+                logging.info(f"Usuario agregado: {user.username}")
+                
+        return {"message": f"{len(users)} usuarios insertados exitosamente en DynamoDB."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/trigger_cleanup")
+async def trigger_cleanup(user: UserBase = Depends(UserBase)):
+    info = table.get_item(Key={'username': user.username, 'last_name':user.last_name})['Item']
+    return info
     
 
 @router.delete("/delete", response_model= SuccessResponse, status_code=status.HTTP_200_OK)
@@ -117,3 +140,4 @@ async def get_users_by_id(
     )    
     
     return SuccessResponse(status_code=200, detail="The user has been found", data=user_info['Item'])
+
