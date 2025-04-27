@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Depends, status, HTTPException
 from fastapi.security import HTTPBearer
 from app.schemas.users import UpdateUser, Users, UserBase
+from app.controllers.users import clean_up
 # from app.db.users import db
 import boto3
 from app.responses.users import SuccessResponse, ErrorResponse
 import logging
+import pandas as pd
+import json
+import psycopg2
 
 #from pyjwt import pyjwt
-
 
 router = APIRouter()
 oauth2_scheme = HTTPBearer()
@@ -15,6 +18,15 @@ oauth2_scheme = HTTPBearer()
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table('users')
 
+conn = psycopg2.connect(
+            host='example.c3mqa60k2ubs.us-west-1.rds.amazonaws.com',
+            database='postgres',
+            user='postgres',
+            password='ultimatez',
+            port=5432
+        )
+
+db = conn.cursor()
 
 @router.post("/create", response_model=SuccessResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
@@ -45,18 +57,23 @@ async def upload_users(users: list[Users]):
     try:
         with table.batch_writer() as batch:
             for user in users:
-                batch.put_item(Item=user.dict())
-                logging.info(f"Usuario agregado: {user.username}")
+                batch.put_item(Item=user.model_dump())
+                logging.info(f"User added: {user.username}")
                 
-        return {"message": f"{len(users)} usuarios insertados exitosamente en DynamoDB."}
+        return {"message": f"{len(users)} users inserted successfully into DynamoDB"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
 @router.post("/trigger_cleanup")
-async def trigger_cleanup(user: UserBase = Depends(UserBase)):
-    info = table.get_item(Key={'username': user.username, 'last_name':user.last_name})['Item']
-    return info
+async def trigger_cleanup():
+    try:
+        await clean_up()
+    except:
+        raise ErrorResponse.bad_request
     
+    return SuccessResponse(status_code=200, 
+                           detail="The cleanup activity has been performed successfully", 
+                            )
 
 @router.delete("/delete", response_model= SuccessResponse, status_code=status.HTTP_200_OK)
 async def delete_user(
@@ -66,16 +83,10 @@ async def delete_user(
     try:
         info = table.get_item(Key={'username': user.username, 'last_name':user.last_name})
     except:
-        raise HTTPException(status_code=500, detail={
-            "status code" : 500,
-            "error" : "Something went wrong while connecting to DynamoDB"
-        })
+        raise ErrorResponse.server_error
     
     if 'Item' not in info:
-        raise HTTPException(status_code=404, detail={
-            "status code" : 404,
-            "error" : "The user was not found"
-        })
+        raise ErrorResponse.not_found
     
     table.delete_item(
         Key={
