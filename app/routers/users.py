@@ -152,3 +152,20 @@ async def get_users_by_id(
     
     return SuccessResponse(status_code=200, detail="The user has been found", data=user_info['Item'])
 
+@router.get("/get_all_users", response_model=SuccessResponse, status_code=200)
+async def get_all_users(
+):
+    try:
+        content = table.scan()['Items']
+
+    except:
+        raise ErrorResponse.server_error
+    
+    if not content:
+        raise ErrorResponse.not_found
+    
+    df = pd.DataFrame(content)
+    json_new = df.to_json(orient="index")
+    new = json.loads(json_new)
+
+    return SuccessResponse(status_code=200, detail="The data has been retrieved successfully", data=new)
